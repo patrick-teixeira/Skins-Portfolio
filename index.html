@@ -7,16 +7,47 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="app-shell">
+    <section class="auth-screen" id="authScreen">
+      <form class="auth-card" id="authForm">
+        <div>
+          <p class="eyebrow">Portfolio privado</p>
+          <h1>CS Skins Portfolio</h1>
+          <p>Entre para gerenciar suas compras, vendas e PnL.</p>
+        </div>
+
+        <label>
+          Usuario
+          <input id="authUsername" name="username" type="text" autocomplete="username" required />
+        </label>
+
+        <label>
+          Senha
+          <input id="authPassword" name="password" type="password" autocomplete="current-password" required />
+        </label>
+
+        <p class="auth-error" id="authError" role="alert"></p>
+
+        <div class="modal-actions">
+          <button class="secondary-button" id="registerButton" type="button">Criar conta</button>
+          <button class="primary-button" type="submit">Entrar</button>
+        </div>
+      </form>
+    </section>
+
+    <main class="app-shell" id="appShell" hidden>
       <header class="topbar">
         <div>
           <p class="eyebrow">Trade portfolio</p>
           <h1>CS Skins Portfolio</h1>
         </div>
-        <button class="primary-button" id="openTransaction" type="button">
-          <span aria-hidden="true">+</span>
-          Add transaction
-        </button>
+        <div class="topbar-actions">
+          <span class="user-pill" id="userPill"></span>
+          <button class="secondary-button" id="logoutButton" type="button">Sair</button>
+          <button class="primary-button" id="openTransaction" type="button">
+            <span aria-hidden="true">+</span>
+            Add transaction
+          </button>
+        </div>
       </header>
 
       <section class="summary" aria-label="Resumo do portfolio">
@@ -35,6 +66,7 @@
         <article>
           <span>PnL realizado</span>
           <strong id="totalPnl">R$ 0,00</strong>
+          <small id="averagePnlPercent">Media 0,00%</small>
         </article>
       </section>
 
@@ -140,7 +172,7 @@
             <input id="salePrice" name="salePrice" type="number" min="0" step="0.01" placeholder="0.00" required />
           </label>
           <label>
-            Taxa marketplace
+            Taxa marketplace (%)
             <input id="saleFee" name="saleFee" type="number" min="0" step="0.01" placeholder="0.00" />
           </label>
         </div>

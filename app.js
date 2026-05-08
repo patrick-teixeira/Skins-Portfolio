@@ -1,5 +1,3 @@
-const STORAGE_KEY = "cs-skins-transactions";
-
 const fallbackSkins = [
   "AK-47 | Redline",
   "AWP | Asiimov",
@@ -11,6 +9,15 @@ const fallbackSkins = [
   "Butterfly Knife | Fade",
 ];
 
+const authScreen = document.querySelector("#authScreen");
+const appShell = document.querySelector("#appShell");
+const authForm = document.querySelector("#authForm");
+const authUsername = document.querySelector("#authUsername");
+const authPassword = document.querySelector("#authPassword");
+const authError = document.querySelector("#authError");
+const registerButton = document.querySelector("#registerButton");
+const logoutButton = document.querySelector("#logoutButton");
+const userPill = document.querySelector("#userPill");
 const modal = document.querySelector("#transactionModal");
 const form = document.querySelector("#transactionForm");
 const openButton = document.querySelector("#openTransaction");
@@ -22,6 +29,7 @@ const totalSkins = document.querySelector("#totalSkins");
 const totalInvested = document.querySelector("#totalInvested");
 const totalSold = document.querySelector("#totalSold");
 const totalPnl = document.querySelector("#totalPnl");
+const averagePnlPercent = document.querySelector("#averagePnlPercent");
 const skinSearchResults = document.querySelector("#skinSearchResults");
 const purchaseDate = document.querySelector("#purchaseDate");
 const skinNameInput = document.querySelector("#skinName");
@@ -42,7 +50,7 @@ const salePrice = document.querySelector("#salePrice");
 const saleFee = document.querySelector("#saleFee");
 const saleDate = document.querySelector("#saleDate");
 
-let transactions = loadTransactions();
+let transactions = [];
 let knownSkins = [];
 let skinSearchTimer = null;
 let skinSearchController = null;
@@ -51,6 +59,71 @@ const moneyFormatter = new Intl.NumberFormat("pt-BR", {
   style: "currency",
   currency: "BRL",
 });
+
+async function init() {
+  const session = await apiRequest("/api/auth/me", { allowUnauthorized: true });
+
+  if (session.user) {
+    await showApp(session.user);
+    return;
+  }
+
+  showAuth();
+}
+
+async function authenticate(endpoint) {
+  authError.textContent = "";
+
+  try {
+    const payload = {
+      username: authUsername.value.trim(),
+      password: authPassword.value,
+    };
+    const response = await apiRequest(endpoint, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+
+    authForm.reset();
+    await showApp(response.user);
+  } catch (error) {
+    authError.textContent = error.message;
+  }
+}
+
+async function showApp(user) {
+  userPill.textContent = user.username;
+  authScreen.hidden = true;
+  appShell.hidden = false;
+  transactions = await apiRequest("/api/transactions");
+  render();
+}
+
+function showAuth() {
+  appShell.hidden = true;
+  authScreen.hidden = false;
+  authUsername.focus();
+}
+
+async function apiRequest(url, options = {}) {
+  const { allowUnauthorized = false, ...fetchOptions } = options;
+  const response = await fetch(url, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(fetchOptions.headers ?? {}),
+    },
+    ...fetchOptions,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    if (response.status === 401 && allowUnauthorized) return payload;
+    throw new Error(payload.error ?? "Erro na requisicao");
+  }
+
+  return payload;
+}
 
 openButton.addEventListener("click", async () => {
   form.reset();
@@ -64,6 +137,22 @@ closeButton.addEventListener("click", () => modal.close());
 cancelButton.addEventListener("click", () => modal.close());
 closeSale.addEventListener("click", () => saleModal.close());
 cancelSale.addEventListener("click", () => saleModal.close());
+
+authForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await authenticate("/api/auth/login");
+});
+
+registerButton.addEventListener("click", async () => {
+  await authenticate("/api/auth/register");
+});
+
+logoutButton.addEventListener("click", async () => {
+  await apiRequest("/api/auth/logout", { method: "POST" });
+  transactions = [];
+  render();
+  showAuth();
+});
 
 skinNameInput.addEventListener("change", () => {
   applySelectedSkin();
@@ -112,8 +201,7 @@ form.addEventListener("submit", async (event) => {
   await hydrateSkinFromApi();
 
   const formData = new FormData(form);
-  const transaction = {
-    id: crypto.randomUUID(),
+  const payload = {
     skinId: formData.get("skinId"),
     skinName: formData.get("skinName").trim(),
     skinRarity: formData.get("skinRarity"),
@@ -124,13 +212,17 @@ form.addEventListener("submit", async (event) => {
     notes: formData.get("notes").trim(),
   };
 
+  const transaction = await apiRequest("/api/transactions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
   transactions = [transaction, ...transactions];
-  saveTransactions();
   render();
   modal.close();
 });
 
-skinGrid.addEventListener("click", (event) => {
+skinGrid.addEventListener("click", async (event) => {
   const saleButton = event.target.closest("[data-sale-id]");
   if (saleButton) {
     openSaleModal(saleButton.dataset.saleId);
@@ -140,12 +232,14 @@ skinGrid.addEventListener("click", (event) => {
   const deleteButton = event.target.closest("[data-delete-id]");
   if (!deleteButton) return;
 
+  await apiRequest(`/api/transactions/${encodeURIComponent(deleteButton.dataset.deleteId)}`, {
+    method: "DELETE",
+  });
   transactions = transactions.filter((transaction) => transaction.id !== deleteButton.dataset.deleteId);
-  saveTransactions();
   render();
 });
 
-saleForm.addEventListener("submit", (event) => {
+saleForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const formData = new FormData(saleForm);
@@ -154,32 +248,21 @@ saleForm.addEventListener("submit", (event) => {
   const nextSaleFee = Number(formData.get("saleFee")) || 0;
   const nextSaleDate = formData.get("saleDate") || new Date().toISOString().slice(0, 10);
 
-  transactions = transactions.map((transaction) => {
-    if (transaction.id !== transactionId) return transaction;
-    return {
-      ...transaction,
+  const updatedTransaction = await apiRequest(`/api/transactions/${encodeURIComponent(transactionId)}/sale`, {
+    method: "PUT",
+    body: JSON.stringify({
       salePrice: nextSalePrice,
       saleFee: nextSaleFee,
       saleDate: nextSaleDate,
-    };
+    }),
   });
 
-  saveTransactions();
+  transactions = transactions.map((transaction) =>
+    transaction.id === transactionId ? updatedTransaction : transaction,
+  );
   render();
   saleModal.close();
 });
-
-function loadTransactions() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) ?? [];
-  } catch {
-    return [];
-  }
-}
-
-function saveTransactions() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
-}
 
 function render() {
   emptyState.hidden = transactions.length > 0;
@@ -194,12 +277,15 @@ function render() {
     if (!hasSale(transaction)) return sum;
     return sum + getPnl(transaction);
   }, 0);
+  const averagePercent = getAveragePnlPercent(transactions);
 
   totalSkins.textContent = transactions.length;
   totalInvested.textContent = moneyFormatter.format(invested);
   totalSold.textContent = moneyFormatter.format(sold);
   totalPnl.textContent = moneyFormatter.format(pnl);
   totalPnl.className = getPnlClass(pnl);
+  averagePnlPercent.textContent = `Media ${formatPercent(averagePercent)}`;
+  averagePnlPercent.className = getPnlClass(averagePercent);
 }
 
 function createSkinCard(transaction) {
@@ -216,7 +302,7 @@ function createSkinCard(transaction) {
       <div>
         <span class="meta-label">Venda</span>
         <strong>${moneyFormatter.format(getNetSale(transaction))} em ${formatDate(transaction.saleDate)}</strong>
-        <span class="meta-label">Bruto ${moneyFormatter.format(transaction.salePrice)} - taxa ${moneyFormatter.format(getSaleFee(transaction))}</span>
+        <span class="meta-label">Bruto ${moneyFormatter.format(transaction.salePrice)} - taxa ${formatPercent(getSaleFee(transaction))} (${moneyFormatter.format(getSaleFeeAmount(transaction))})</span>
       </div>
     `
     : "";
@@ -280,11 +366,15 @@ function getPnl(transaction) {
 }
 
 function getNetSale(transaction) {
-  return transaction.salePrice - getSaleFee(transaction);
+  return transaction.salePrice - getSaleFeeAmount(transaction);
 }
 
 function getSaleFee(transaction) {
   return Number(transaction.saleFee) || 0;
+}
+
+function getSaleFeeAmount(transaction) {
+  return transaction.salePrice * (getSaleFee(transaction) / 100);
 }
 
 function getPnlClass(value) {
@@ -294,10 +384,28 @@ function getPnlClass(value) {
 }
 
 function formatProfitPercent(transaction) {
-  if (transaction.buyPrice <= 0) return "0,00";
+  return formatPercentNumber(getProfitPercent(transaction));
+}
 
-  const percent = (getPnl(transaction) / transaction.buyPrice) * 100;
-  return percent.toLocaleString("pt-BR", {
+function getProfitPercent(transaction) {
+  if (transaction.buyPrice <= 0) return 0;
+  return (getPnl(transaction) / transaction.buyPrice) * 100;
+}
+
+function getAveragePnlPercent(items) {
+  const soldItems = items.filter((transaction) => hasSale(transaction));
+  if (soldItems.length === 0) return 0;
+
+  const totalPercent = soldItems.reduce((sum, transaction) => sum + getProfitPercent(transaction), 0);
+  return totalPercent / soldItems.length;
+}
+
+function formatPercent(value) {
+  return `${formatPercentNumber(value)}%`;
+}
+
+function formatPercentNumber(value) {
+  return value.toLocaleString("pt-BR", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -469,4 +577,4 @@ function hideSkinSearchResults() {
   skinSearchResults.innerHTML = "";
 }
 
-render();
+init();
