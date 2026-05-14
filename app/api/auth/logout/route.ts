@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getDb, runQuery, saveDb } from "@/lib/db";
 
 export async function POST() {
   const cookieStore = await cookies();
@@ -8,8 +8,9 @@ export async function POST() {
 
   if (sessionId) {
     try {
-      const db = getDb();
-      db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+      const db = await getDb();
+      runQuery(db, "DELETE FROM sessions WHERE id = ?", [sessionId]);
+      saveDb();
     } catch {
       // Ignore errors during logout
     }

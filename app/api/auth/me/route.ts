@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getDb, queryOne } from "@/lib/db";
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -11,15 +11,15 @@ export async function GET() {
   }
 
   try {
-    const db = getDb();
-    const session = db
-      .prepare(
-        `SELECT users.id, users.username
-         FROM sessions
-         JOIN users ON users.id = sessions.user_id
-         WHERE sessions.id = ? AND sessions.expires_at > ?`
-      )
-      .get(sessionId, Date.now()) as { id: string; username: string } | undefined;
+    const db = await getDb();
+    const session = queryOne(
+      db,
+      `SELECT users.id, users.username
+       FROM sessions
+       JOIN users ON users.id = sessions.user_id
+       WHERE sessions.id = ? AND sessions.expires_at > ?`,
+      [sessionId, Date.now()]
+    ) as { id: string; username: string } | null;
 
     if (!session) {
       return NextResponse.json({ user: null });

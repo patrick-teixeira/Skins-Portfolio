@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getDb, queryOne, runQuery, saveDb } from "@/lib/db";
 
 async function getCurrentUser() {
   const cookieStore = await cookies();
@@ -8,17 +8,17 @@ async function getCurrentUser() {
 
   if (!sessionId) return null;
 
-  const db = getDb();
-  const session = db
-    .prepare(
-      `SELECT users.id, users.username
-       FROM sessions
-       JOIN users ON users.id = sessions.user_id
-       WHERE sessions.id = ? AND sessions.expires_at > ?`
-    )
-    .get(sessionId, Date.now()) as { id: string; username: string } | undefined;
+  const db = await getDb();
+  const session = queryOne(
+    db,
+    `SELECT users.id, users.username
+     FROM sessions
+     JOIN users ON users.id = sessions.user_id
+     WHERE sessions.id = ? AND sessions.expires_at > ?`,
+    [sessionId, Date.now()]
+  ) as { id: string; username: string } | null;
 
-  return session ?? null;
+  return session;
 }
 
 export async function DELETE(
@@ -32,9 +32,10 @@ export async function DELETE(
   }
 
   const { id } = await params;
-  const db = getDb();
+  const db = await getDb();
 
-  db.prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?").run(id, user.id);
+  runQuery(db, "DELETE FROM transactions WHERE id = ? AND user_id = ?", [id, user.id]);
+  saveDb();
 
   return NextResponse.json({ ok: true });
 }

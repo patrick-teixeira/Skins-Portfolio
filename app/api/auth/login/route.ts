@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import crypto from "crypto";
-import { getDb, hashPassword } from "@/lib/db";
+import { getDb, hashPassword, queryOne, runQuery, saveDb } from "@/lib/db";
 
 export async function POST(request: Request) {
   try {
@@ -9,10 +9,10 @@ export async function POST(request: Request) {
     const username = String(body.username ?? "").trim();
     const password = String(body.password ?? "");
 
-    const db = getDb();
-    const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username) as
+    const db = await getDb();
+    const user = queryOne(db, "SELECT * FROM users WHERE username = ?", [username]) as
       | { id: string; username: string; password_hash: string; salt: string }
-      | undefined;
+      | null;
 
     if (!user || hashPassword(password, user.salt) !== user.password_hash) {
       return NextResponse.json({ error: "Usuario ou senha invalidos" }, { status: 401 });
@@ -23,10 +23,12 @@ export async function POST(request: Request) {
     const maxAgeSeconds = 60 * 60 * 24 * 30;
     const expiresAt = Date.now() + maxAgeSeconds * 1000;
 
-    db.prepare(`
-      INSERT INTO sessions (id, user_id, expires_at, created_at)
-      VALUES (?, ?, ?, ?)
-    `).run(sessionId, user.id, expiresAt, new Date().toISOString());
+    runQuery(
+      db,
+      `INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+      [sessionId, user.id, expiresAt, new Date().toISOString()]
+    );
+    saveDb();
 
     const cookieStore = await cookies();
     cookieStore.set("session_id", sessionId, {

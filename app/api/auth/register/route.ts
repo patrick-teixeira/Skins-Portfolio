@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import crypto from "crypto";
-import { getDb, hashPassword, generateSalt } from "@/lib/db";
+import { getDb, hashPassword, generateSalt, queryOne, runQuery, saveDb } from "@/lib/db";
 
 export async function POST(request: Request) {
   try {
@@ -16,9 +16,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const db = getDb();
+    const db = await getDb();
 
-    const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
+    const existing = queryOne(db, "SELECT id FROM users WHERE username = ?", [username]);
     if (existing) {
       return NextResponse.json({ error: "Usuario ja existe" }, { status: 409 });
     }
@@ -27,20 +27,23 @@ export async function POST(request: Request) {
     const salt = generateSalt();
     const passwordHash = hashPassword(password, salt);
 
-    db.prepare(`
-      INSERT INTO users (id, username, password_hash, salt, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(userId, username, passwordHash, salt, new Date().toISOString());
+    runQuery(
+      db,
+      `INSERT INTO users (id, username, password_hash, salt, created_at) VALUES (?, ?, ?, ?, ?)`,
+      [userId, username, passwordHash, salt, new Date().toISOString()]
+    );
 
     // Create session
     const sessionId = crypto.randomUUID();
     const maxAgeSeconds = 60 * 60 * 24 * 30;
     const expiresAt = Date.now() + maxAgeSeconds * 1000;
 
-    db.prepare(`
-      INSERT INTO sessions (id, user_id, expires_at, created_at)
-      VALUES (?, ?, ?, ?)
-    `).run(sessionId, userId, expiresAt, new Date().toISOString());
+    runQuery(
+      db,
+      `INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+      [sessionId, userId, expiresAt, new Date().toISOString()]
+    );
+    saveDb();
 
     const cookieStore = await cookies();
     cookieStore.set("session_id", sessionId, {

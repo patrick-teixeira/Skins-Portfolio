@@ -1,21 +1,51 @@
-import Database from "better-sqlite3";
+import initSqlJs, { Database as SqlJsDatabase } from "sql.js";
+import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 
 const DB_PATH = path.join(process.cwd(), "portfolio.sqlite");
 
-let db: Database.Database | null = null;
+let db: SqlJsDatabase | null = null;
+let initPromise: Promise<SqlJsDatabase> | null = null;
 
-export function getDb(): Database.Database {
-  if (!db) {
-    db = new Database(DB_PATH);
-    setupDatabase(db);
+async function initDb(): Promise<SqlJsDatabase> {
+  const SQL = await initSqlJs();
+
+  let database: SqlJsDatabase;
+
+  // Try to load existing database
+  if (fs.existsSync(DB_PATH)) {
+    const buffer = fs.readFileSync(DB_PATH);
+    database = new SQL.Database(buffer);
+  } else {
+    database = new SQL.Database();
   }
+
+  setupDatabase(database);
+  return database;
+}
+
+export async function getDb(): Promise<SqlJsDatabase> {
+  if (db) return db;
+
+  if (!initPromise) {
+    initPromise = initDb();
+  }
+
+  db = await initPromise;
   return db;
 }
 
-function setupDatabase(db: Database.Database) {
-  db.exec(`
+export function saveDb() {
+  if (db) {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(DB_PATH, buffer);
+  }
+}
+
+function setupDatabase(database: SqlJsDatabase) {
+  database.run(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       username TEXT NOT NULL UNIQUE,
@@ -23,7 +53,9 @@ function setupDatabase(db: Database.Database) {
       salt TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+  `);
 
+  database.run(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -31,7 +63,9 @@ function setupDatabase(db: Database.Database) {
       created_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+  `);
 
+  database.run(`
     CREATE TABLE IF NOT EXISTS transactions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -75,4 +109,28 @@ export function rowToTransaction(row: Record<string, unknown>) {
     saleDate: row.sale_date as string | null,
     notes: row.notes as string,
   };
+}
+
+// Helper to run queries and get results as objects
+export function queryAll(database: SqlJsDatabase, sql: string, params: unknown[] = []): Record<string, unknown>[] {
+  const stmt = database.prepare(sql);
+  stmt.bind(params);
+
+  const results: Record<string, unknown>[] = [];
+  while (stmt.step()) {
+    const row = stmt.getAsObject();
+    results.push(row as Record<string, unknown>);
+  }
+  stmt.free();
+
+  return results;
+}
+
+export function queryOne(database: SqlJsDatabase, sql: string, params: unknown[] = []): Record<string, unknown> | null {
+  const results = queryAll(database, sql, params);
+  return results.length > 0 ? results[0] : null;
+}
+
+export function runQuery(database: SqlJsDatabase, sql: string, params: unknown[] = []): void {
+  database.run(sql, params);
 }
