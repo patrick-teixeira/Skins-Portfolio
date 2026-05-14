@@ -5,9 +5,10 @@ let db: SqlJsDatabase | null = null;
 let initPromise: Promise<SqlJsDatabase> | null = null;
 
 async function initDb(): Promise<SqlJsDatabase> {
-  // Load sql.js with the WASM file from CDN for compatibility
+  // Use dynamic import to ensure proper loading in serverless environment
   const SQL = await initSqlJs({
-    locateFile: (file: string) => `https://sql.js.org/dist/${file}`,
+    // Use jsdelivr CDN which is more reliable
+    locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist/${file}`,
   });
 
   const database = new SQL.Database();
@@ -19,7 +20,10 @@ export async function getDb(): Promise<SqlJsDatabase> {
   if (db) return db;
 
   if (!initPromise) {
-    initPromise = initDb();
+    initPromise = initDb().catch((error) => {
+      initPromise = null; // Reset on error to allow retry
+      throw error;
+    });
   }
 
   db = await initPromise;
