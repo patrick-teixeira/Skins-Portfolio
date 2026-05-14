@@ -1,51 +1,26 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { getDb, rowToTransaction, queryOne, queryAll, runQuery, saveDb } from "@/lib/db";
 
-async function getCurrentUser() {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get("session_id")?.value;
-
-  if (!sessionId) return null;
-
-  const db = await getDb();
-  const session = queryOne(
-    db,
-    `SELECT users.id, users.username
-     FROM sessions
-     JOIN users ON users.id = sessions.user_id
-     WHERE sessions.id = ? AND sessions.expires_at > ?`,
-    [sessionId, Date.now()]
-  ) as { id: string; username: string } | null;
-
-  return session;
-}
+const DEFAULT_USER_ID = "demo-user";
 
 export async function GET() {
-  const user = await getCurrentUser();
+  try {
+    const db = await getDb();
+    const rows = queryAll(
+      db,
+      `SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC`,
+      [DEFAULT_USER_ID]
+    );
 
-  if (!user) {
-    return NextResponse.json({ error: "Login necessario" }, { status: 401 });
+    return NextResponse.json(rows.map(rowToTransaction));
+  } catch (error) {
+    console.log("[v0] GET transactions error:", error);
+    return NextResponse.json([], { status: 200 });
   }
-
-  const db = await getDb();
-  const rows = queryAll(
-    db,
-    `SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC`,
-    [user.id]
-  );
-
-  return NextResponse.json(rows.map(rowToTransaction));
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Login necessario" }, { status: 401 });
-  }
-
   try {
     const body = await request.json();
 
@@ -61,7 +36,7 @@ export async function POST(request: Request) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         transactionId,
-        user.id,
+        DEFAULT_USER_ID,
         String(body.skinId ?? ""),
         String(body.skinName ?? "").trim(),
         String(body.skinRarity ?? ""),
@@ -81,7 +56,8 @@ export async function POST(request: Request) {
     >;
 
     return NextResponse.json(rowToTransaction(row), { status: 201 });
-  } catch {
+  } catch (error) {
+    console.log("[v0] POST transaction error:", error);
     return NextResponse.json({ error: "Erro ao criar transacao" }, { status: 500 });
   }
 }

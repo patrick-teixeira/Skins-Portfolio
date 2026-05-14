@@ -1,41 +1,22 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { getDb, queryOne, runQuery, saveDb } from "@/lib/db";
+import { getDb, runQuery, saveDb } from "@/lib/db";
 
-async function getCurrentUser() {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get("session_id")?.value;
-
-  if (!sessionId) return null;
-
-  const db = await getDb();
-  const session = queryOne(
-    db,
-    `SELECT users.id, users.username
-     FROM sessions
-     JOIN users ON users.id = sessions.user_id
-     WHERE sessions.id = ? AND sessions.expires_at > ?`,
-    [sessionId, Date.now()]
-  ) as { id: string; username: string } | null;
-
-  return session;
-}
+const DEFAULT_USER_ID = "demo-user";
 
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const user = await getCurrentUser();
+  try {
+    const { id } = await params;
+    const db = await getDb();
 
-  if (!user) {
-    return NextResponse.json({ error: "Login necessario" }, { status: 401 });
+    runQuery(db, "DELETE FROM transactions WHERE id = ? AND user_id = ?", [id, DEFAULT_USER_ID]);
+    saveDb();
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.log("[v0] DELETE transaction error:", error);
+    return NextResponse.json({ error: "Erro ao deletar" }, { status: 500 });
   }
-
-  const { id } = await params;
-  const db = await getDb();
-
-  runQuery(db, "DELETE FROM transactions WHERE id = ? AND user_id = ?", [id, user.id]);
-  saveDb();
-
-  return NextResponse.json({ ok: true });
 }
