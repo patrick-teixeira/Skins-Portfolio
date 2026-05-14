@@ -1,26 +1,16 @@
 import initSqlJs, { Database as SqlJsDatabase } from "sql.js";
-import fs from "fs";
-import path from "path";
 import crypto from "crypto";
-
-const DB_PATH = path.join(process.cwd(), "portfolio.sqlite");
 
 let db: SqlJsDatabase | null = null;
 let initPromise: Promise<SqlJsDatabase> | null = null;
 
 async function initDb(): Promise<SqlJsDatabase> {
-  const SQL = await initSqlJs();
+  // Load sql.js with the WASM file from CDN for compatibility
+  const SQL = await initSqlJs({
+    locateFile: (file: string) => `https://sql.js.org/dist/${file}`,
+  });
 
-  let database: SqlJsDatabase;
-
-  // Try to load existing database
-  if (fs.existsSync(DB_PATH)) {
-    const buffer = fs.readFileSync(DB_PATH);
-    database = new SQL.Database(buffer);
-  } else {
-    database = new SQL.Database();
-  }
-
+  const database = new SQL.Database();
   setupDatabase(database);
   return database;
 }
@@ -36,12 +26,9 @@ export async function getDb(): Promise<SqlJsDatabase> {
   return db;
 }
 
+// No-op since we're using in-memory database
 export function saveDb() {
-  if (db) {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_PATH, buffer);
-  }
+  // In-memory database - no persistence needed in serverless environment
 }
 
 function setupDatabase(database: SqlJsDatabase) {

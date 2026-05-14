@@ -56,7 +56,8 @@ export async function POST(request: Request) {
     return NextResponse.json({
       user: { id: userId, username },
     });
-  } catch {
+  } catch (error) {
+    console.log("[v0] Register error:", error);
     return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 });
   }
 }
