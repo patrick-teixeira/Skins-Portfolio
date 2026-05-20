@@ -1,3 +1,5 @@
 portfolio.sqlite
 .next
 node_modules
+.env
+.env.local
