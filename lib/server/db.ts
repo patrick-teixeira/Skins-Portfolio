@@ -6,14 +6,37 @@ declare global {
 }
 
 function createPool() {
-  if (!process.env.DATABASE_URL) {
+  const connectionString = process.env.DATABASE_URL;
+
+  if (!connectionString) {
     throw new Error("DATABASE_URL nao configurada");
   }
 
+  const useSsl = process.env.POSTGRES_SSL !== "false";
+
   return new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.POSTGRES_SSL === "false" ? undefined : { rejectUnauthorized: false },
+    connectionString: normalizeConnectionString(connectionString, useSsl),
+    ssl: useSsl ? { rejectUnauthorized: false } : undefined,
   });
+}
+
+function normalizeConnectionString(connectionString: string, useSsl: boolean) {
+  if (!useSsl) return connectionString;
+
+  try {
+    const url = new URL(connectionString);
+
+    // node-postgres can let sslmode from the URL override the explicit ssl object.
+    // Keeping SSL controlled here avoids SELF_SIGNED_CERT_IN_CHAIN on hosted Postgres.
+    url.searchParams.delete("sslmode");
+    url.searchParams.delete("sslcert");
+    url.searchParams.delete("sslkey");
+    url.searchParams.delete("sslrootcert");
+
+    return url.toString();
+  } catch {
+    return connectionString;
+  }
 }
 
 export function getPool() {
