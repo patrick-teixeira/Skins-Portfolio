@@ -1,4 +1,5 @@
-const http = require("http");
+const express = require("express");
+const next = require("next");
 const fs = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
@@ -6,6 +7,7 @@ const { DatabaseSync } = require("node:sqlite");
 
 const PORT = Number(process.env.PORT) || 3000;
 const ROOT = __dirname;
+const IS_DEV = process.env.NODE_ENV !== "production";
 const DB_PATH = path.join(ROOT, "portfolio.sqlite");
 const SKIN_FILES = [
   path.join(ROOT, "utils", "skins_info.json"),
@@ -27,121 +29,140 @@ let skinCache = null;
 const db = new DatabaseSync(DB_PATH);
 setupDatabase();
 
-const server = http.createServer(async (req, res) => {
+const nextApp = next({ dev: IS_DEV, dir: ROOT });
+const nextHandler = nextApp.getRequestHandler();
+const app = express();
+
+app.use(express.json());
+
+app.get("/api/auth/me", (req, res) => {
+  const user = getCurrentUser(req);
+  return sendJson(res, { user: user ? publicUser(user) : null });
+});
+
+app.post("/api/auth/register", (req, res) => {
+  return registerUser(req.body ?? {}, res);
+});
+
+app.post("/api/auth/login", (req, res) => {
+  return loginUser(req.body ?? {}, res);
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const sessionId = getCookie(req, "session_id");
+  if (sessionId) {
+    db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+  }
+
+  clearSessionCookie(res);
+  return sendJson(res, { ok: true });
+});
+
+app.get("/api/transactions", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  return sendJson(res, listTransactions(user.id));
+});
+
+app.post("/api/transactions", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
   try {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-
-    if (url.pathname === "/api/auth/me") {
-      const user = getCurrentUser(req);
-      return sendJson(res, { user: user ? publicUser(user) : null });
-    }
-
-    if (url.pathname === "/api/auth/register" && req.method === "POST") {
-      const body = await readJsonBody(req);
-      return registerUser(body, res);
-    }
-
-    if (url.pathname === "/api/auth/login" && req.method === "POST") {
-      const body = await readJsonBody(req);
-      return loginUser(body, res);
-    }
-
-    if (url.pathname === "/api/auth/logout" && req.method === "POST") {
-      const sessionId = getCookie(req, "session_id");
-      if (sessionId) {
-        db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
-      }
-
-      clearSessionCookie(res);
-      return sendJson(res, { ok: true });
-    }
-
-    if (url.pathname === "/api/transactions") {
-      const user = requireUser(req, res);
-      if (!user) return;
-
-      if (req.method === "GET") {
-        return sendJson(res, listTransactions(user.id));
-      }
-
-      if (req.method === "POST") {
-        const body = await readJsonBody(req);
-        const transaction = createTransaction(user.id, body);
-        return sendJson(res, transaction, 201);
-      }
-    }
-
-    if (url.pathname.startsWith("/api/transactions/")) {
-      const user = requireUser(req, res);
-      if (!user) return;
-
-      const parts = url.pathname.split("/").filter(Boolean);
-      const transactionId = decodeURIComponent(parts[2] ?? "");
-
-      if (req.method === "DELETE" && transactionId) {
-        db.prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?").run(transactionId, user.id);
-        return sendJson(res, { ok: true });
-      }
-
-      if (req.method === "PUT" && parts[3] === "sale" && transactionId) {
-        const body = await readJsonBody(req);
-        const transaction = updateSale(user.id, transactionId, body);
-
-        if (!transaction) {
-          return sendJson(res, { error: "Transacao nao encontrada" }, 404);
-        }
-
-        return sendJson(res, transaction);
-      }
-    }
-
-    if (url.pathname === "/api/skins") {
-      const query = url.searchParams.get("q") ?? "";
-      const limit = Number(url.searchParams.get("limit")) || 50;
-      const skins = await getSkins();
-      const filtered = filterSkins(skins, query).slice(0, Math.min(limit, 1000));
-      return sendJson(res, filtered);
-    }
-
-    if (url.pathname === "/api/skin-image") {
-      const name = url.searchParams.get("name") ?? "";
-      const skins = await getSkins();
-      const skin = findSkinByName(skins, name);
-
-      if (!skin) {
-        return sendJson(res, { error: "Skin nao encontrada" }, 404);
-      }
-
-      return sendJson(res, {
-        id: skin.id,
-        name: skin.name,
-        image: skin.image,
-        rarity: skin.rarity,
-        rarityColor: skin.rarityColor,
-      });
-    }
-
-    if (url.pathname.startsWith("/api/skins/")) {
-      const id = decodeURIComponent(url.pathname.replace("/api/skins/", ""));
-      const skins = await getSkins();
-      const skin = skins.find((item) => item.id === id);
-
-      if (!skin) {
-        return sendJson(res, { error: "Skin nao encontrada" }, 404);
-      }
-
-      return sendJson(res, skin);
-    }
-
-    return serveStatic(url.pathname, res);
+    const transaction = createTransaction(user.id, req.body ?? {});
+    return sendJson(res, transaction, 201);
   } catch (error) {
-    console.error(error);
-    return sendJson(res, { error: "Erro interno do servidor" }, 500);
+    return sendJson(res, { error: error.message }, 400);
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`CS Skins Portfolio rodando em http://localhost:${PORT}`);
+app.delete("/api/transactions/:transactionId", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  db.prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?").run(
+    req.params.transactionId,
+    user.id,
+  );
+  return sendJson(res, { ok: true });
+});
+
+app.put("/api/transactions/:transactionId", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const transaction = updateTransaction(user.id, req.params.transactionId, req.body ?? {});
+
+    if (!transaction) {
+      return sendJson(res, { error: "Transacao nao encontrada" }, 404);
+    }
+
+    return sendJson(res, transaction);
+  } catch (error) {
+    return sendJson(res, { error: error.message }, 400);
+  }
+});
+
+app.put("/api/transactions/:transactionId/sale", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const transaction = updateSale(user.id, req.params.transactionId, req.body ?? {});
+
+  if (!transaction) {
+    return sendJson(res, { error: "Transacao nao encontrada" }, 404);
+  }
+
+  return sendJson(res, transaction);
+});
+
+app.get("/api/skins", async (req, res) => {
+  const query = req.query.q ?? "";
+  const limit = Number(req.query.limit) || 50;
+  const skins = await getSkins();
+  const filtered = filterSkins(skins, String(query)).slice(0, Math.min(limit, 1000));
+  return sendJson(res, filtered);
+});
+
+app.get("/api/skin-image", async (req, res) => {
+  const name = String(req.query.name ?? "");
+  const skins = await getSkins();
+  const skin = findSkinByName(skins, name);
+
+  if (!skin) {
+    return sendJson(res, { error: "Skin nao encontrada" }, 404);
+  }
+
+  return sendJson(res, {
+    id: skin.id,
+    name: skin.name,
+    image: skin.image,
+    rarity: skin.rarity,
+    rarityColor: skin.rarityColor,
+  });
+});
+
+app.get("/api/skins/:id", async (req, res) => {
+  const skins = await getSkins();
+  const skin = skins.find((item) => item.id === req.params.id);
+
+  if (!skin) {
+    return sendJson(res, { error: "Skin nao encontrada" }, 404);
+  }
+
+  return sendJson(res, skin);
+});
+
+app.all("*", (req, res) => {
+  return nextHandler(req, res);
+});
+
+nextApp.prepare().then(() => {
+  app.listen(PORT, () => {
+    console.log(`CS Skins Portfolio rodando em http://localhost:${PORT}`);
+  });
 });
 
 function setupDatabase() {
@@ -171,6 +192,7 @@ function setupDatabase() {
       skin_rarity_color TEXT,
       skin_image TEXT,
       buy_price REAL NOT NULL DEFAULT 0,
+      marketplace TEXT,
       purchase_date TEXT NOT NULL,
       sale_price REAL,
       sale_fee REAL,
@@ -180,6 +202,14 @@ function setupDatabase() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
   `);
+
+  addColumnIfMissing("transactions", "marketplace", "TEXT");
+}
+
+function addColumnIfMissing(tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (columns.some((column) => column.name === columnName)) return;
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }
 
 function registerUser(body, res) {
@@ -232,14 +262,20 @@ function createSession(res, userId) {
     VALUES (?, ?, ?, ?)
   `).run(id, userId, expiresAt, new Date().toISOString());
 
-  res.setHeader(
-    "Set-Cookie",
-    `session_id=${id}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`,
-  );
+  res.cookie("session_id", id, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: maxAgeSeconds * 1000,
+  });
 }
 
 function clearSessionCookie(res) {
-  res.setHeader("Set-Cookie", "session_id=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+  res.clearCookie("session_id", {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+  });
 }
 
 function getCurrentUser(req) {
@@ -298,9 +334,9 @@ function createTransaction(userId, body) {
   db.prepare(`
     INSERT INTO transactions (
       id, user_id, skin_id, skin_name, skin_rarity, skin_rarity_color, skin_image,
-      buy_price, purchase_date, notes, created_at
+      buy_price, marketplace, purchase_date, notes, created_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     transaction.id,
     userId,
@@ -310,12 +346,46 @@ function createTransaction(userId, body) {
     transaction.skinRarityColor,
     transaction.skinImage,
     transaction.buyPrice,
+    transaction.marketplace,
     transaction.purchaseDate,
     transaction.notes,
     new Date().toISOString(),
   );
 
   return getTransaction(userId, transaction.id);
+}
+
+function updateTransaction(userId, transactionId, body) {
+  const transaction = normalizeTransactionBody(body);
+
+  const result = db.prepare(`
+    UPDATE transactions
+    SET skin_id = ?,
+        skin_name = ?,
+        skin_rarity = ?,
+        skin_rarity_color = ?,
+        skin_image = ?,
+        buy_price = ?,
+        marketplace = ?,
+        purchase_date = ?,
+        notes = ?
+    WHERE id = ? AND user_id = ?
+  `).run(
+    transaction.skinId,
+    transaction.skinName,
+    transaction.skinRarity,
+    transaction.skinRarityColor,
+    transaction.skinImage,
+    transaction.buyPrice,
+    transaction.marketplace,
+    transaction.purchaseDate,
+    transaction.notes,
+    transactionId,
+    userId,
+  );
+
+  if (result.changes === 0) return null;
+  return getTransaction(userId, transactionId);
 }
 
 function updateSale(userId, transactionId, body) {
@@ -343,13 +413,19 @@ function getTransaction(userId, transactionId) {
 }
 
 function normalizeTransactionBody(body) {
+  const skinName = String(body.skinName ?? "").trim();
+  if (!skinName) {
+    throw new Error("Nome da skin e obrigatorio");
+  }
+
   return {
     skinId: String(body.skinId ?? ""),
-    skinName: String(body.skinName ?? "").trim(),
+    skinName,
     skinRarity: String(body.skinRarity ?? ""),
     skinRarityColor: String(body.skinRarityColor ?? ""),
     skinImage: String(body.skinImage ?? ""),
     buyPrice: Number(body.buyPrice) || 0,
+    marketplace: String(body.marketplace ?? "").trim(),
     purchaseDate: body.purchaseDate || new Date().toISOString().slice(0, 10),
     notes: String(body.notes ?? "").trim(),
   };
@@ -364,6 +440,7 @@ function rowToTransaction(row) {
     skinRarityColor: row.skin_rarity_color,
     skinImage: row.skin_image,
     buyPrice: row.buy_price,
+    marketplace: row.marketplace,
     purchaseDate: row.purchase_date,
     salePrice: row.sale_price,
     saleFee: row.sale_fee,
@@ -503,34 +580,12 @@ async function serveStatic(pathname, res) {
 }
 
 function sendJson(res, payload, statusCode = 200) {
-  res.writeHead(statusCode, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
-  });
-  res.end(JSON.stringify(payload));
+  res.set("Access-Control-Allow-Origin", "*");
+  return res.status(statusCode).json(payload);
 }
 
 function sendText(res, payload, statusCode = 200) {
-  res.writeHead(statusCode, {
-    "Content-Type": "text/plain; charset=utf-8",
-  });
-  res.end(payload);
-}
-
-async function readJsonBody(req) {
-  const chunks = [];
-
-  for await (const chunk of req) {
-    chunks.push(chunk);
-  }
-
-  if (chunks.length === 0) return {};
-
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    return {};
-  }
+  return res.status(statusCode).type("text/plain; charset=utf-8").send(payload);
 }
 
 function getCookie(req, name) {
